@@ -288,6 +288,8 @@ class ActionFinder:
                         raise
                 if tdict["action"] <= lowest_action:
                     lowest_action = tdict["action"]
+            if lowest_action == np.inf:
+                lowest_action = 0.0
             return lowest_action
         except Exception as e:
             return 0
