@@ -6,7 +6,7 @@ import numpy as np
 import ray
 from cosmoTransitions import transitionFinder, tunneling1D, pathDeformation
 
-from potential import PotentialWrapper
+from .potential import PotentialWrapper
 
 
 class FOPTFinder:
