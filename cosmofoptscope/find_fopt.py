@@ -6,7 +6,7 @@ import numpy as np
 import ray
 from cosmoTransitions import transitionFinder, tunneling1D, pathDeformation
 
-from .potential import PotentialWrapper
+from potential import PotentialWrapper
 
 
 class FOPTFinder:
@@ -18,6 +18,7 @@ class FOPTFinder:
         Mp,
         initialized=False,
         parallel=False,
+        findP_option='Linde',
         criterion_value=None,
         Tnuc=None,
         num_points=100,
@@ -30,11 +31,13 @@ class FOPTFinder:
         self.num_points = num_points
         self.window_length = window_length
         self.g_star = g_star
-        self.Mp = Mp
+        self.Mp = Mp 
+        self.findP_option = findP_option
 
         # Initialization
         self.dST_dT_vec = None
         self.dST_dT_Tn = None
+        self.action = None
 
         # - Find all transitions
         if not initialized:
@@ -64,6 +67,8 @@ class FOPTFinder:
             np.log10(self.T0), np.log10(self.Tcrit), num=self.num_points
         )
         self.S_vec = self.findActions(self.T_domain, parallel)
+        print("S: ", self.S_vec)
+        self.S_fn = PchipInterpolator(self.T_domain, self.S_vec)
         self.S_over_T_fn = PchipInterpolator(self.T_domain, self.S_vec / self.T_domain)
 
         # To find Tnuc
@@ -73,7 +78,10 @@ class FOPTFinder:
         self.findP()
 
     def findTnuc(self, g_star=None, Mp=None):
-        if self.Tnuc:
+        if self.Tnuc is not None:
+            self.gradST()
+            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
+            print("dST_dT_Tn value:", self.dST_dT_Tn)
             return self.Tnuc
         if self.criterion_value is not None:
             try:
@@ -93,22 +101,29 @@ class FOPTFinder:
                 self.Tnuc = None
         else:
             Tmin = self.T0
-
+            
             def is_P_one(T):
-                return np.log10(self.P_fn(self.Tcrit - T))
+                f = np.log10(self.P_fn(self.Tcrit - T))
+                self.iterations.append({                    
+                    'iteration': len(self.iterations),
+                    'T': self.Tcrit-T,
+                    'f': 10**f,
+                })
+                return f
 
             params = dict(
                 xtol=1e-10,
                 rtol=1e-10,
                 maxiter=1000,
             )
-
+            self.iterations=[]
             sol = optimize.root_scalar(
                 is_P_one, bracket=[0, self.Tcrit - Tmin], method="brentq", **params
             )
             T_root = sol.root
             self.Tnuc_err = np.abs(self.P_fn(self.Tcrit - T_root) - 1)
             self.Tnuc = self.Tcrit - T_root
+        
             self.dST_dT_Tn = self.dST_dT(self.Tnuc)
 
     def create_action_finder(self):
@@ -158,23 +173,32 @@ class FOPTFinder:
             raise ValueError("Tcrit not found")
         if self.dST_dT_Tn is None:
             raise ValueError("dST_dT_Tn not found")
-        action_finder = ActionFinder(self.potential, self.start_phase)
-        action = action_finder.findAction(self.Tnuc)
+        self.action = self.S_fn(self.Tnuc)
+        self.S_over_Tnuc = self.S_over_T_fn(self.Tnuc)
         return {
             "T0": self.T0,
             "Tnuc": self.Tnuc,
             "Tcrit": self.Tcrit,
-            "S/Tnuc": action / self.Tnuc,
+            "S/Tnuc": self.action / self.Tnuc,
             "alpha": self.potential.alpha(self.Tnuc, self.g_star),
             "beta": self.dST_dT_Tn * self.Tnuc,
+            "vev": self.potential.findTrueMin(self.Tnuc)
         }
 
-    def findDR(self):
+    def findDR(self, option=None):
+        if option is None:
+            option = self.findP_option
+
         if len(self.S_vec) < 3:
             raise ValueError("Not enough actions to spline")
         result = np.zeros(len(self.T_domain))
+
         for i, (S, T) in enumerate(zip(self.S_vec, self.T_domain)):
-            result[i] = np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
+            if option == 'Linde':
+                result[i] = np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
+            elif option == 'Anderson':
+                result[i] = np.exp(-S / T) * T**4 
+
         self.DR_vec = result
 
     def findHubbleTemp(self):
