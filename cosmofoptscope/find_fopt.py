@@ -38,6 +38,12 @@ class FOPTFinder:
         g_star,
         Mp,
         initialized=False,
+<<<<<<< HEAD
+=======
+        parallel=False,
+        findP_option='Linde',
+        criterion_value=None,
+>>>>>>> origin/main
         Tnuc=None,
         num_points=200,
         window_length=19,
@@ -47,15 +53,24 @@ class FOPTFinder:
         self.Tnuc = Tnuc
         self.num_points = num_points
         self.g_star = g_star
+<<<<<<< HEAD
         self.Mp = Mp
         self.window_length = window_length
         self.cache = None
+=======
+        self.Mp = Mp 
+        self.findP_option = findP_option
+>>>>>>> origin/main
 
         # Initialization
         self.dST_dT_vec = None
         self.dST_dT_Tn = None
+<<<<<<< HEAD
         self.T_finite = None
         self.dPdT_finite = None
+=======
+        self.action = None
+>>>>>>> origin/main
 
         # - Find all transitions
         if not initialized:
@@ -138,7 +153,12 @@ class FOPTFinder:
         self.T_domain = np.logspace(
             np.log10(self.T_finite_0), np.log10(self.T_finite_1), self.num_points
         )
+<<<<<<< HEAD
         self.S_vec = np.array([action_finder.findAction(T) for T in self.T_domain])
+=======
+        self.S_vec = self.findActions(self.T_domain, parallel)
+        print("S: ", self.S_vec)
+>>>>>>> origin/main
         self.S_fn = PchipInterpolator(self.T_domain, self.S_vec)
         self.S_over_T_fn = PchipInterpolator(self.T_domain, self.S_vec / self.T_domain)
 
@@ -149,6 +169,7 @@ class FOPTFinder:
         log_dPdT_vec = np.log10(self.dPdT_vec)
         log_dPdT_fn = PchipInterpolator(self.T_domain, log_dPdT_vec)
 
+<<<<<<< HEAD
         def integral(t):
             if t >= self.T_domain[-1]:
                 return 0
@@ -162,6 +183,71 @@ class FOPTFinder:
         self.P_fn = integral
         self.P_vec = np.array([integral(T) for T in self.T_domain])
         print("P_vec:", self.P_vec)
+=======
+    def findTnuc(self, g_star=None, Mp=None):
+        if self.Tnuc is not None:
+            self.gradST()
+            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
+            print("dST_dT_Tn value:", self.dST_dT_Tn)
+            return self.Tnuc
+        if self.criterion_value is not None:
+            try:
+                PT_result = transitionFinder.tunnelFromPhase(
+                    self.potential.phases,
+                    self.start_phase,
+                    self.potential.Vtot,
+                    self.potential.gradV,
+                    Tmax=self.Tmax,
+                    nuclCriterion=lambda S, T: S / (T + 1e-100) - self.criterion_value,
+                )
+                self.Tnuc = PT_result.get("Tnuc")
+                if self.Tnuc is None or not np.isfinite(self.Tnuc):
+                    raise ValueError("No Tnuc found")
+            except Exception as e:
+                print(e)
+                self.Tnuc = None
+        else:
+            Tmin = self.T0
+            
+            def is_P_one(T):
+                f = np.log10(self.P_fn(self.Tcrit - T))
+                self.iterations.append({                    
+                    'iteration': len(self.iterations),
+                    'T': self.Tcrit-T,
+                    'f': 10**f,
+                })
+                return f
+
+            params = dict(
+                xtol=1e-10,
+                rtol=1e-10,
+                maxiter=1000,
+            )
+            self.iterations=[]
+            sol = optimize.root_scalar(
+                is_P_one, bracket=[0, self.Tcrit - Tmin], method="brentq", **params
+            )
+            T_root = sol.root
+            self.Tnuc_err = np.abs(self.P_fn(self.Tcrit - T_root) - 1)
+            self.Tnuc = self.Tcrit - T_root
+        
+            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
+
+    def create_action_finder(self):
+        return ActionFinder(
+            potential=self.potential, start_phase=self.start_phase
+        )
+
+    def findActions(self, T_vec, parallel=False):
+        finders = [self.create_action_finder() for _ in range(len(T_vec))]
+        if parallel:
+            actions = ray.get(
+                [finder.findAction.remote(T) for finder, T in zip(finders, T_vec)]
+            )
+        else:
+            actions = [finder.findAction(T) for finder, T in zip(finders, T_vec)]
+        return np.array(actions)
+>>>>>>> origin/main
 
     def gradST(self):
         if self.dST_dT_vec and self.dST_dT_Tn:
@@ -221,7 +307,11 @@ class FOPTFinder:
         if self.dST_dT_Tn is None:
             raise ValueError("dST_dT_Tn not found")
         self.action = self.S_fn(self.Tnuc)
+<<<<<<< HEAD
         self.S_over_Tnuc = self.action / self.Tnuc
+=======
+        self.S_over_Tnuc = self.S_over_T_fn(self.Tnuc)
+>>>>>>> origin/main
         return {
             "T0": self.T0,
             "Tnuc": self.Tnuc,
@@ -232,6 +322,24 @@ class FOPTFinder:
             "vev": self.potential.findTrueMin(self.Tnuc)
         }
 
+<<<<<<< HEAD
+=======
+    def findDR(self, option=None):
+        if option is None:
+            option = self.findP_option
+
+        if len(self.S_vec) < 3:
+            raise ValueError("Not enough actions to spline")
+        result = np.zeros(len(self.T_domain))
+
+        for i, (S, T) in enumerate(zip(self.S_vec, self.T_domain)):
+            if option == 'Linde':
+                result[i] = np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
+            elif option == 'Anderson':
+                result[i] = np.exp(-S / T) * T**4 
+
+        self.DR_vec = result
+>>>>>>> origin/main
 
         
 

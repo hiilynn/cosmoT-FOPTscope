@@ -1,13 +1,13 @@
 # cosmofoptscope
 
-A Python package for analyzing First Order Phase Transitions (FOPT) in cosmological contexts. Built upon the CosmoTransitions package, this tool calculates nucleation temperatures for various theoretical models and computes essential phase transition parameters including phase transition strength (α) and inverse duration of phase transition (β).
+A Python package for analyzing First Order Phase Transitions (FOPT) in cosmological contexts. Built upon the CosmoTransitions package, this tool calculates nucleation temperatures for various theoretical models and computes essential phase transition parameters including phase transition strength ($\alpha$) and inverse duration of phase transition ($\beta$).
 
 ## Features
 
 - Built on CosmoTransitions framework for reliable phase transition analysis
 - Calculation of nucleation temperature for different theoretical models
-- Computation of phase transition strength (α)
-- Evaluation of inverse duration of phase transition (β)
+- Computation of phase transition strength ($\alpha$)
+- Evaluation of inverse duration of phase transition ($\beta$)
 - Analysis of tunneling actions
 - Multiple phase studies
 - Support for parallel computation
@@ -30,6 +30,28 @@ A Python package for analyzing First Order Phase Transitions (FOPT) in cosmologi
 
 ```bash
 pip install cosmofoptscope
+```
+
+### Dependency Conflicts?
+
+If you experience version conflicts with dependencies (numpy, scipy, ray, or cosmoTransitions), we recommend using uv for installation:
+
+1. Install uv:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. Create and activate a virtual environment:
+```bash
+uv venv
+source .venv/bin/activate  # On Unix/macOS
+# or
+.venv\Scripts\activate     # On Windows
+```
+
+3. Install cosmofoptscope:
+```bash
+uv pip install cosmofoptscope
 ```
 
 ## Quick Start
