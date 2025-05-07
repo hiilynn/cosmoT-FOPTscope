@@ -38,39 +38,29 @@ class FOPTFinder:
         g_star,
         Mp,
         initialized=False,
-<<<<<<< HEAD
-=======
         parallel=False,
         findP_option='Linde',
         criterion_value=None,
->>>>>>> origin/main
         Tnuc=None,
         num_points=200,
         window_length=19,
-    ):
         self.potential = potential
         self.Tmax = Tmax
         self.Tnuc = Tnuc
         self.num_points = num_points
         self.g_star = g_star
-<<<<<<< HEAD
         self.Mp = Mp
         self.window_length = window_length
         self.cache = None
-=======
         self.Mp = Mp 
         self.findP_option = findP_option
->>>>>>> origin/main
 
         # Initialization
         self.dST_dT_vec = None
         self.dST_dT_Tn = None
-<<<<<<< HEAD
         self.T_finite = None
         self.dPdT_finite = None
-=======
         self.action = None
->>>>>>> origin/main
 
         # - Find all transitions
         if not initialized:
@@ -153,12 +143,9 @@ class FOPTFinder:
         self.T_domain = np.logspace(
             np.log10(self.T_finite_0), np.log10(self.T_finite_1), self.num_points
         )
-<<<<<<< HEAD
         self.S_vec = np.array([action_finder.findAction(T) for T in self.T_domain])
-=======
         self.S_vec = self.findActions(self.T_domain, parallel)
         print("S: ", self.S_vec)
->>>>>>> origin/main
         self.S_fn = PchipInterpolator(self.T_domain, self.S_vec)
         self.S_over_T_fn = PchipInterpolator(self.T_domain, self.S_vec / self.T_domain)
 
@@ -169,7 +156,6 @@ class FOPTFinder:
         log_dPdT_vec = np.log10(self.dPdT_vec)
         log_dPdT_fn = PchipInterpolator(self.T_domain, log_dPdT_vec)
 
-<<<<<<< HEAD
         def integral(t):
             if t >= self.T_domain[-1]:
                 return 0
@@ -183,7 +169,6 @@ class FOPTFinder:
         self.P_fn = integral
         self.P_vec = np.array([integral(T) for T in self.T_domain])
         print("P_vec:", self.P_vec)
-=======
     def findTnuc(self, g_star=None, Mp=None):
         if self.Tnuc is not None:
             self.gradST()
@@ -247,7 +232,6 @@ class FOPTFinder:
         else:
             actions = [finder.findAction(T) for finder, T in zip(finders, T_vec)]
         return np.array(actions)
->>>>>>> origin/main
 
     def gradST(self):
         if self.dST_dT_vec and self.dST_dT_Tn:
@@ -307,11 +291,8 @@ class FOPTFinder:
         if self.dST_dT_Tn is None:
             raise ValueError("dST_dT_Tn not found")
         self.action = self.S_fn(self.Tnuc)
-<<<<<<< HEAD
         self.S_over_Tnuc = self.action / self.Tnuc
-=======
         self.S_over_Tnuc = self.S_over_T_fn(self.Tnuc)
->>>>>>> origin/main
         return {
             "T0": self.T0,
             "Tnuc": self.Tnuc,
@@ -322,8 +303,6 @@ class FOPTFinder:
             "vev": self.potential.findTrueMin(self.Tnuc)
         }
 
-<<<<<<< HEAD
-=======
     def findDR(self, option=None):
         if option is None:
             option = self.findP_option
@@ -339,7 +318,6 @@ class FOPTFinder:
                 result[i] = np.exp(-S / T) * T**4 
 
         self.DR_vec = result
->>>>>>> origin/main
 
         
 
@@ -428,8 +406,6 @@ class ActionFinder:
                         raise
                 if tdict["action"] <= lowest_action:
                     lowest_action = tdict["action"]
-            #if lowest_action == np.inf:
-            #    lowest_action = 0.0
             return lowest_action
         except Exception as e:
             return 0
