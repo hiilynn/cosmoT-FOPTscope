@@ -6,8 +6,29 @@ import numpy as np
 import ray
 from cosmoTransitions import transitionFinder, tunneling1D, pathDeformation
 
-from .potential import PotentialWrapper
+from potential import PotentialWrapper
 
+
+def linde(S, T):
+    if np.isinf(S):
+        return 0
+    return np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
+
+def linde_vec(S, T):
+    return np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
+
+def calc_hubble_temp(T, g_star, Mp):
+    return np.pi / (3 * Mp) * np.sqrt(g_star / 10) * T**2
+
+def calc_decay_rate(S, T):
+    return linde(S, T)
+
+def calc_decay_rate_vec(S, T):
+    return linde_vec(S, T)
+
+def calc_dPdT(S, T, hubble_temp, g_star, Mp):
+    decay_rate = calc_decay_rate_vec(S, T)
+    return decay_rate / (T * hubble_temp ** 4)
 
 class FOPTFinder:
     def __init__(
@@ -17,31 +38,31 @@ class FOPTFinder:
         g_star,
         Mp,
         initialized=False,
-        parallel=False,
-        criterion_value=None,
         Tnuc=None,
-        num_points=100,
+        num_points=200,
         window_length=19,
     ):
         self.potential = potential
         self.Tmax = Tmax
-        self.criterion_value = criterion_value
         self.Tnuc = Tnuc
         self.num_points = num_points
-        self.window_length = window_length
         self.g_star = g_star
         self.Mp = Mp
+        self.window_length = window_length
+        self.cache = None
 
         # Initialization
         self.dST_dT_vec = None
         self.dST_dT_Tn = None
+        self.T_finite = None
+        self.dPdT_finite = None
 
         # - Find all transitions
         if not initialized:
             self.potential.getPhases()
             self.potential.findAllTransitions()
 
-        # - Find critical temperature
+        # - Find the critical temperature
         tc_trans_result = self.potential.calcTcTrans()
         if tc_trans_result and len(tc_trans_result) > 0:
             self.Tcrit = tc_trans_result[0].get("Tcrit")
@@ -59,72 +80,88 @@ class FOPTFinder:
         )
         self.start_phase = self.potential.phases[start_idx]
 
-        # Find actions for T_domain
+        # Find T_finite_0 (First T where S > 0) via binary search
+        action_finder = ActionFinder(self.potential, self.start_phase)
+        T1 = self.T0
+        T2 = self.Tcrit
+        T_finite_0 = None
+        S1 = action_finder.findAction(T1)
+        if S1 > 0 and np.isfinite(S1):
+            T_finite_0 = T1
+        else:
+            S2 = action_finder.findAction(T2)
+            if np.isinf(S2):
+                find_finite = False
+            else:
+                find_finite = True
+            while (np.isfinite(S2) and S2 > 0) or not find_finite:
+                T_finite_0 = T2
+                T2 = 0.5 * (T1 + T2)
+                S2 = action_finder.findAction(T2)
+                print(f"T1 = {T1}, T2 = {T2}")
+                print(f"S1 = {S1}, S2 = {S2}")
+                if not find_finite and np.isfinite(S2):
+                    find_finite = True
+        self.T_finite_0 = T_finite_0
+        print(f"T_finite_0 = {self.T_finite_0}")
+
+        # Find T_finite_1 (Last T where linde > 0) via binary search
+        T1 = T_finite_0
+        T2 = self.Tcrit
+        S1 = action_finder.findAction(T1)
+        S2 = action_finder.findAction(T2)
+        D1 = calc_decay_rate(S1, T1)
+        D2 = calc_decay_rate(S2, T2)
+        print(f"S1 = {S1}, S2 = {S2}")
+        print(f"D1 = {D1}, D2 = {D2}")
+        if D2 > 0:
+            T_finite_1 = T2
+        else:
+            find_finite = False
+            while D1 > 0:
+                T_finite_1 = T1
+                T = 0.5 * (T1 + T2)
+                S = action_finder.findAction(T)
+                D = calc_decay_rate(S, T)
+                if not find_finite and D <= 0:
+                    T2 = T
+                    D2 = D
+                else:
+                    if not find_finite:
+                        find_finite = True
+                    T1 = T
+                    D1 = D
+        self.T_finite_1 = T_finite_1
+        print(f"T_finite_1 = {self.T_finite_1}")
+
+        # Declare T_domain
         self.T_domain = np.logspace(
-            np.log10(self.T0), np.log10(self.Tcrit), num=self.num_points
+            np.log10(self.T_finite_0), np.log10(self.T_finite_1), self.num_points
         )
-        self.S_vec = self.findActions(self.T_domain, parallel)
+        self.S_vec = np.array([action_finder.findAction(T) for T in self.T_domain])
+        self.S_fn = PchipInterpolator(self.T_domain, self.S_vec)
         self.S_over_T_fn = PchipInterpolator(self.T_domain, self.S_vec / self.T_domain)
 
-        # To find Tnuc
-        self.findDR()
-        self.findHubbleTemp()
-        self.findDPdT()
-        self.findP()
+        self.decay_rate = calc_decay_rate_vec(self.S_vec, self.T_domain)
+        self.Hubble_vec = calc_hubble_temp(self.T_domain, self.g_star, self.Mp)
+        self.dPdT_vec = calc_dPdT(self.S_vec, self.T_domain, self.Hubble_vec, self.g_star, self.Mp)
+        
+        log_dPdT_vec = np.log10(self.dPdT_vec)
+        log_dPdT_fn = PchipInterpolator(self.T_domain, log_dPdT_vec)
 
-    def findTnuc(self, g_star=None, Mp=None):
-        if self.Tnuc:
-            return self.Tnuc
-        if self.criterion_value is not None:
-            try:
-                PT_result = transitionFinder.tunnelFromPhase(
-                    self.potential.phases,
-                    self.start_phase,
-                    self.potential.Vtot,
-                    self.potential.gradV,
-                    Tmax=self.Tmax,
-                    nuclCriterion=lambda S, T: S / (T + 1e-100) - self.criterion_value,
-                )
-                self.Tnuc = PT_result.get("Tnuc")
-                if self.Tnuc is None or not np.isfinite(self.Tnuc):
-                    raise ValueError("No Tnuc found")
-            except Exception as e:
-                print(e)
-                self.Tnuc = None
-        else:
-            Tmin = self.T0
+        def integral(t):
+            if t >= self.T_domain[-1]:
+                return 0
+            elif t <= self.T_domain[0]:
+                if self.cache is None:
+                    self.cache = quad(lambda t: np.exp(log_dPdT_fn(t)), self.T_domain[0], self.T_domain[-1])[0]
+                return self.cache
+            else:
+                return quad(lambda t: np.exp(log_dPdT_fn(t)), t, self.T_domain[-1])[0]
 
-            def is_P_one(T):
-                return np.log10(self.P_fn(self.Tcrit - T))
-
-            params = dict(
-                xtol=1e-10,
-                rtol=1e-10,
-                maxiter=1000,
-            )
-
-            sol = optimize.root_scalar(
-                is_P_one, bracket=[0, self.Tcrit - Tmin], method="brentq", **params
-            )
-            T_root = sol.root
-            self.Tnuc_err = np.abs(self.P_fn(self.Tcrit - T_root) - 1)
-            self.Tnuc = self.Tcrit - T_root
-            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
-
-    def create_action_finder(self):
-        return ActionFinder(
-            potential=self.potential, start_phase=self.start_phase
-        )
-
-    def findActions(self, T_vec, parallel=False):
-        finders = [self.create_action_finder() for _ in range(len(T_vec))]
-        if parallel:
-            actions = ray.get(
-                [finder.findAction.remote(T) for finder, T in zip(finders, T_vec)]
-            )
-        else:
-            actions = [finder.findAction(T) for finder, T in zip(finders, T_vec)]
-        return np.array(actions)
+        self.P_fn = integral
+        self.P_vec = np.array([integral(T) for T in self.T_domain])
+        print("P_vec:", self.P_vec)
 
     def gradST(self):
         if self.dST_dT_vec and self.dST_dT_Tn:
@@ -146,10 +183,35 @@ class FOPTFinder:
     def findBetas(self, smoothing=True):
         if self.dST_dT_vec is None:
             self.gradST()
-        if self.smoothing:
+        if smoothing:
             return self.smoothed_dST_dT_vec * self.T_domain
         else:
             return self.dST_dT_vec * self.T_domain
+
+    def findTnuc(self, g_star=None, Mp=None):
+        if self.Tnuc is not None:
+            self.gradST()
+            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
+            print("dST_dT_Tn value:", self.dST_dT_Tn)
+            return self.Tnuc
+        else:
+            Tmin = self.T_domain[0]
+            def is_P_one(T):
+                f = self.P_fn(self.T_domain[-1] - T)
+                return f - 1.0
+
+            params = dict(
+                xtol = 1e-10,
+                rtol = 1e-10,
+                maxiter = 100,
+            )
+            sol = optimize.root_scalar(
+                is_P_one, bracket=[0, self.T_domain[-1] - Tmin], method="brentq", **params
+            )
+            T_root = sol.root
+            self.Tnuc = self.T_domain[-1] - T_root
+            self.Tnuc_err = np.abs(is_P_one(T_root))
+            self.dST_dT_Tn = self.dST_dT(self.Tnuc)
 
     def report(self):
         if self.Tnuc is None:
@@ -158,56 +220,25 @@ class FOPTFinder:
             raise ValueError("Tcrit not found")
         if self.dST_dT_Tn is None:
             raise ValueError("dST_dT_Tn not found")
-        action_finder = ActionFinder(self.potential, self.start_phase)
-        action = action_finder.findAction(self.Tnuc)
+        self.action = self.S_fn(self.Tnuc)
+        self.S_over_Tnuc = self.action / self.Tnuc
         return {
             "T0": self.T0,
             "Tnuc": self.Tnuc,
             "Tcrit": self.Tcrit,
-            "S/Tnuc": action / self.Tnuc,
+            "S/Tnuc": self.action / self.Tnuc,
             "alpha": self.potential.alpha(self.Tnuc, self.g_star),
             "beta": self.dST_dT_Tn * self.Tnuc,
+            "vev": self.potential.findTrueMin(self.Tnuc)
         }
 
-    def findDR(self):
-        if len(self.S_vec) < 3:
-            raise ValueError("Not enough actions to spline")
-        result = np.zeros(len(self.T_domain))
-        for i, (S, T) in enumerate(zip(self.S_vec, self.T_domain)):
-            result[i] = np.exp(-S / T) * T**4 * (S / (T * 2 * np.pi)) ** 1.5
-        self.DR_vec = result
 
-    def findHubbleTemp(self):
-        self.Hubble_vec = (
-            np.pi / (3 * self.Mp) * np.sqrt(self.g_star / 10) * self.T_domain**2
-        )
-
-    def findDPdT(self):
-        self.dPdT_vec = self.DR_vec / (self.T_domain * self.Hubble_vec**4)
-
-    def findP(self):
-        if self.dPdT_vec[0] > 0:
-            print("Warning: dPdT[0] is not zero")
-            idx_zero = np.where(self.dPdT_vec <= 0)[0][0]
-            T_finite = self.T_domain[0 : idx_zero]
-            y_finite = self.dPdT_vec[0 : idx_zero]
-        else:
-            y_temp = self.dPdT_vec[1:]
-            idx_zero = np.where(y_temp <= 0)[0][0]
-            T_finite = self.T_domain[1 : idx_zero + 1]
-            y_finite = self.dPdT_vec[1 : idx_zero + 1]
-
-        self.log_dPdT_fn = PchipInterpolator(T_finite, np.log(y_finite))
-
-        def integral(t):
-            if t >= T_finite[-1]:
-                return 0
-            return quad(lambda t: np.exp(self.log_dPdT_fn(t)), t, T_finite[-1])[0]
-
-        self.P_fn = integral
+        
 
 
-#@ray.remote
+# ┌──────────────────────────────────────────────────────────┐
+#  Action Finder
+# └──────────────────────────────────────────────────────────┘
 class ActionFinder:
     def __init__(self, potential, start_phase):
         self.potential = potential
@@ -215,6 +246,7 @@ class ActionFinder:
         self.outdict = {}
 
     def findAction(self, T: float, phitol=1e-8, overlap_angle=45.0):
+        print(f"Finding action at T = {T}")
         if T in self.outdict:
             return self.outdict[T]["action"]
 
@@ -288,8 +320,8 @@ class ActionFinder:
                         raise
                 if tdict["action"] <= lowest_action:
                     lowest_action = tdict["action"]
-            if lowest_action == np.inf:
-                lowest_action = 0.0
+            #if lowest_action == np.inf:
+            #    lowest_action = 0.0
             return lowest_action
         except Exception as e:
             return 0

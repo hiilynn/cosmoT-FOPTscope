@@ -20,16 +20,18 @@ class PotentialWrapper(generic_potential.generic_potential):
             dVdT -= self.DVtot(X, T + 2 * T_eps)
             dVdT *= 1.0 / (12 * T_eps)
         V = self.DVtot(X, T)
-        return V - T * dVdT
+        #return V - T * dVdT
+        return V - T * dVdT / 4
 
-    def findTrueMin(self, T=0.0, bound_max=1e3):
+    def findTrueMin(self, T=0.0):
         def objective(x, T):
             if x <= 0:
                 return 1e50
             return self.DVtot([x], T)
 
+        bound_max = 10*self.approxZeroTMin()[0]
         result_approx = optimize.minimize_scalar(
-            lambda x: objective(x, T), bounds=(0, bound_max), tol=1e-6
+            lambda x: objective(x, T), method='bounded', bounds=(0, bound_max), options={'xatol': 1e-6}
         )
 
         return result_approx.x
